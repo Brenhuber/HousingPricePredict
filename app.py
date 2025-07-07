@@ -4,7 +4,6 @@ import numpy as np
 import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
@@ -57,8 +56,7 @@ def preprocessed_data():
     df = df[df['sqft'] <= 60000]
     df = df[df['bath'] <= 30]
 
-    log_features = df.columns
-    for col in log_features:
+    for col in df.columns:
         df[col] = np.log1p(df[col])
 
     df = df[df['price'] > 5]
@@ -77,6 +75,9 @@ x_scaled, y, scaler, feature_cols = scaled_data()
 
 @st.cache_data
 def predict(customer: pd.DataFrame):
+    def within_margin_accuracy(y_true, y_pred, margin):
+        correct = np.abs(y_true - y_pred) <= margin
+        return np.mean(correct)
 
     customer_log = np.log1p(customer)
     customer_scaled = scaler.transform(customer_log)
@@ -92,16 +93,16 @@ def predict(customer: pd.DataFrame):
     y_val_pred = model.predict(x_test)
     y_test_exp = np.expm1(y_test)
     y_val_pred_exp = np.expm1(y_val_pred)
-
-    mse = mean_squared_error(y_test_exp, y_val_pred_exp)
+    
     mae = mean_absolute_error(y_test_exp, y_val_pred_exp)
     baseline_mae = mean_absolute_error(y_test_exp, [np.expm1(y_train.mean())] * len(y_test_exp))
     mae_reduction = ((baseline_mae - mae) / baseline_mae) * 100
     r2 = r2_score(y_test_exp, y_val_pred_exp)
+    acc_within_margin = within_margin_accuracy(y_test_exp, y_val_pred_exp, margin=mae)
 
     fi = pd.Series(model.coef_, index=feature_cols)
 
-    return y_pred, mse, mae, mae_reduction, r2, fi
+    return y_pred, mae, mae_reduction, r2, acc_within_margin, fi
 
 # ----------- Sidebar UI -----------
 
@@ -117,15 +118,17 @@ customer = {
 # ------------ Main Page ------------
 
 if st.sidebar.button("📈 Predict Price"):
-    col1, col2, col3 = st.columns(3)
-    prediction, mse, mae, mae_reduction, r2, fi = predict(pd.DataFrame([customer]))
+    col1, col2, col3, col4 = st.columns(4)
+    prediction, mae, mae_reduction, r2, acc_within_margin, fi = predict(pd.DataFrame([customer]))
     with col1:
         st.metric("💵 Predicted Value of House", f"${prediction:,.0f}")
     with col2:
-        st.metric("🎯 Model R² Score", f"{r2 * 100:.2f}%")
+        st.metric("🎯 Model Accuracy (within MAE)", f"{acc_within_margin * 100:.2f}%")
     with col3:
+        st.metric("🎯 Model R² Accuracy", f"{r2 * 100:.2f}%")
+    with col4:
         st.metric("📉 MAE vs Baseline", f"${mae:,.0f} (↓ {mae_reduction:.1f}%)")
-
+        
     st.subheader("📊 Feature Importance")
     if fi is not None and not fi.empty:
         fig = px.bar(
